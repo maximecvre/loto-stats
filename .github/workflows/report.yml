@@ -1,0 +1,54 @@
+name: Rapport Loto
+
+on:
+  schedule:
+    # Lundi, mercredi, samedi Ã  12:00 UTC (~13-14h heure de Paris),
+    # soit plusieurs heures avant le tirage du soir. Ajuste si besoin :
+    # les tirages LOTO ont lieu lundi, mercredi et samedi.
+    - cron: "0 12 * * 1,3,6"
+  workflow_dispatch: {}   # bouton "Run workflow" pour lancer manuellement
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: RÃ©cupÃ©rer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dÃ©pendances
+        run: pip install requests pandas scipy
+
+      - name: TÃ©lÃ©charger l'historique FDJ
+        run: python download_loto.py
+
+      - name: Normaliser les donnÃ©es
+        run: python normalize_loto.py
+
+      - name: GÃ©nÃ©rer le rapport
+        run: python generate_report.py
+
+      - name: PrÃ©parer le site pour GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Publier sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
