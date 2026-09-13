@@ -7,6 +7,7 @@ consulté sur téléphone via GitHub Pages. Écrit dans site/index.html.
 
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 
 from stats_loto import (
     load,
@@ -17,6 +18,7 @@ from stats_loto import (
     chi_square_uniformity,
     theoretical_probabilities,
     technique_grids,
+    composite_scores,
 )
 
 SITE_DIR = Path(__file__).parent / "site"
@@ -257,33 +259,39 @@ HEAD = """<!doctype html>
 <main>
 """
 
-TAIL = """
-<script>
+TAIL_SCRIPT = """
 (function () {
-  function randomInt(maxExclusive) {
+  function uniform01() {
+    // U(0,1) exclusif des bornes, dérivé d'un tirage cryptographique.
     var arr = new Uint32Array(1);
-    var limit = Math.floor(0xFFFFFFFF / maxExclusive) * maxExclusive;
-    var val;
-    do { crypto.getRandomValues(arr); val = arr[0]; } while (val >= limit);
-    return val % maxExclusive;
+    var u;
+    do {
+      crypto.getRandomValues(arr);
+      u = (arr[0] + 1) / (0xFFFFFFFF + 2);
+    } while (u <= 0 || u >= 1);
+    return u;
   }
-  function pick5of49() {
-    var pool = [];
-    for (var i = 1; i <= 49; i++) pool.push(i);
-    var picked = [];
-    for (var k = 0; k < 5; k++) {
-      var idx = randomInt(pool.length);
-      picked.push(pool[idx]);
-      pool.splice(idx, 1);
-    }
-    picked.sort(function (a, b) { return a - b; });
-    return picked;
+  // Tirage pondéré sans remise (algorithme A-Res, Efraimidis-Spirakis) :
+  // chaque numéro reçoit une clé aléatoire dépendant de son poids, on garde
+  // les k plus grandes clés. Plus le poids est grand, plus la probabilité
+  // d'être tiré est grande - mais chaque numéro garde une chance non nulle.
+  function weightedSampleWithoutReplacement(weights, k) {
+    var keyed = Object.keys(weights).map(function (id) {
+      var w = Math.max(weights[id], 1e-9);
+      var u = uniform01();
+      var key = Math.pow(u, 1 / w);
+      return { id: parseInt(id, 10), key: key };
+    });
+    keyed.sort(function (a, b) { return b.key - a.key; });
+    return keyed.slice(0, k).map(function (x) { return x.id; });
   }
   function render() {
     var container = document.getElementById("flash-balls");
     if (!container) return;
     container.innerHTML = "";
-    pick5of49().forEach(function (n) {
+    var balls = weightedSampleWithoutReplacement(BALL_WEIGHTS, 5);
+    balls.sort(function (a, b) { return a - b; });
+    balls.forEach(function (n) {
       var el = document.createElement("div");
       el.className = "ball";
       el.textContent = n;
@@ -291,7 +299,7 @@ TAIL = """
     });
     var chanceEl = document.createElement("div");
     chanceEl.className = "ball ball-chance";
-    chanceEl.textContent = randomInt(10) + 1;
+    chanceEl.textContent = weightedSampleWithoutReplacement(CHANCE_WEIGHTS, 1)[0];
     container.appendChild(chanceEl);
   }
   document.addEventListener("DOMContentLoaded", function () {
@@ -300,11 +308,24 @@ TAIL = """
     if (btn) btn.addEventListener("click", render);
   });
 })();
-</script>
+"""
+
+TAIL_END = """
 </main>
 </body>
 </html>
 """
+
+
+def build_tail(ball_weights_json: str, chance_weights_json: str) -> str:
+    return (
+        "\n<script>\n"
+        f"var BALL_WEIGHTS = {ball_weights_json};\n"
+        f"var CHANCE_WEIGHTS = {chance_weights_json};\n"
+        + TAIL_SCRIPT
+        + "</script>"
+        + TAIL_END
+    )
 
 
 def _color_for(t: float) -> str:
@@ -431,6 +452,10 @@ def generate() -> Path:
     chi2 = chi_square_uniformity(freq)
     proba = theoretical_probabilities()
     grids = technique_grids(df)
+    composite = composite_scores(df)
+
+    ball_weights_json = json.dumps({str(k): round(float(v), 6) for k, v in composite.items()})
+    chance_weights_json = json.dumps({str(k): int(v) for k, v in chance_freq.items()}) if not chance_freq.empty else "{}"
 
     period_start = df["date_tirage"].min().strftime("%d/%m/%Y")
     period_end = df["date_tirage"].max().strftime("%d/%m/%Y")
@@ -450,13 +475,15 @@ et parfaitement équiprobable. Ce qui suit décrit le passé ; ça n'augmente ni
 diminue la chance d'un numéro au prochain tirage.</p>
 
 <section class="flash">
-  <h2>Ta grille — générée au hasard</h2>
+  <h2>Ta grille — algorithme composite</h2>
   <div class="flash-balls" id="flash-balls"></div>
   <button id="flash-btn" type="button">Tirer une nouvelle grille</button>
-  <p class="caption">Générée sur ton téléphone à l'instant, sans lien avec
-  l'historique. Aucune "prédiction" n'est possible sur un tirage indépendant :
-  cette grille a exactement la même probabilité de gagner que n'importe
-  quelle autre combinaison de 5 numéros + 1 numéro Chance.</p>
+  <p class="caption">Combine fréquence historique, écarts et affinité de
+  paires en un score par numéro, puis tire sans remise avec un algorithme
+  de tirage pondéré (Efraimidis–Spirakis), calculé sur ton téléphone.
+  Le score influence quels numéros sortent le plus souvent ici — mais
+  mathématiquement, cette grille reste équivalente au hasard pur : le
+  prochain vrai tirage ne dépend en rien de l'historique.</p>
 </section>
 
 <section>
@@ -515,7 +542,7 @@ diminue la chance d'un numéro au prochain tirage.</p>
 </footer>
 """
 
-    html = HEAD.format(css=CSS) + body + TAIL
+    html = HEAD.format(css=CSS) + body + build_tail(ball_weights_json, chance_weights_json)
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     out = SITE_DIR / "index.html"
     out.write_text(html, encoding="utf-8")
