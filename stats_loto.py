@@ -141,6 +141,33 @@ def theoretical_probabilities() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def composite_scores(df: pd.DataFrame) -> pd.Series:
+    """
+    Combine plusieurs signaux historiques (fréquence, écart, affinité de
+    paires) en un score composite par numéro (1-49). Un score plus élevé
+    pèse plus lourd dans un tirage pondéré sans remise, mais ceci reste,
+    mathématiquement, équivalent à un tirage uniforme : le prochain tirage
+    ne dépend en rien de l'historique.
+    """
+    freq = number_frequencies(df)
+    gaps = gaps_since_last_seen(df).fillna(0)
+    all_pairs = most_common_pairs(df, top_n=10**6)  # toutes les paires observées
+
+    def normalize(s: pd.Series) -> pd.Series:
+        lo, hi = s.min(), s.max()
+        if hi == lo:
+            return pd.Series(0.5, index=s.index)
+        return (s - lo) / (hi - lo)
+
+    pair_weight = pd.Series(0.0, index=freq.index)
+    for row in all_pairs.itertuples():
+        pair_weight[row.numero_1] += row.nb_fois_ensemble
+        pair_weight[row.numero_2] += row.nb_fois_ensemble
+
+    score = 0.4 * normalize(freq) + 0.3 * normalize(gaps) + 0.3 * normalize(pair_weight)
+    return score
+
+
 def weighted_sample(weights: dict, k: int, rng: "np.random.Generator | None" = None) -> list[int]:
     """Tire k éléments sans remise, avec une probabilité proportionnelle aux poids fournis."""
     if rng is None:
