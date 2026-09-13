@@ -21,6 +21,7 @@ from itertools import combinations
 from math import comb
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 DATA_FILE = Path(__file__).parent / "data" / "loto_historique_normalise.csv"
@@ -138,6 +139,67 @@ def theoretical_probabilities() -> pd.DataFrame:
                 "1_chance_sur": round(1 / proba) if proba > 0 else None,
             })
     return pd.DataFrame(rows)
+
+
+def weighted_sample(weights: dict, k: int, rng: "np.random.Generator | None" = None) -> list[int]:
+    """Tire k éléments sans remise, avec une probabilité proportionnelle aux poids fournis."""
+    if rng is None:
+        rng = np.random.default_rng()
+    items = list(weights.keys())
+    w = np.array([max(float(weights[i]), 0.0) for i in items])
+    if w.sum() == 0:
+        w = np.ones_like(w)
+    p = w / w.sum()
+    chosen_idx = rng.choice(len(items), size=k, replace=False, p=p)
+    return sorted(int(items[i]) for i in chosen_idx)
+
+
+def technique_grids(df: pd.DataFrame, rng: "np.random.Generator | None" = None) -> list[dict]:
+    """
+    Génère quelques grilles selon des techniques "classiques" (fréquence,
+    écarts, paires fréquentes). Mathématiquement, chacune de ces grilles a
+    exactement la même probabilité de gagner qu'une grille tirée uniformément
+    au hasard : le prochain tirage est indépendant de tout ce qui précède.
+    Fourni à titre exploratoire/ludique, pas comme un outil de prédiction.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    freq = number_frequencies(df)
+    chance_freq = chance_frequencies(df)
+    gaps = gaps_since_last_seen(df).fillna(0)
+    pairs = most_common_pairs(df, top_n=1)
+
+    def pick_chance():
+        if chance_freq.empty:
+            return None
+        return weighted_sample(chance_freq.to_dict(), 1, rng)[0]
+
+    grids = []
+
+    grids.append({
+        "label": "Fréquence — numéros les plus sortis",
+        "balls": weighted_sample(freq.to_dict(), 5, rng),
+        "chance": pick_chance(),
+    })
+
+    grids.append({
+        "label": "Écarts — numéros \"en retard\"",
+        "balls": weighted_sample(gaps.to_dict(), 5, rng),
+        "chance": pick_chance(),
+    })
+
+    if not pairs.empty:
+        n1, n2 = int(pairs.iloc[0]["numero_1"]), int(pairs.iloc[0]["numero_2"])
+        remaining = {n: w for n, w in freq.to_dict().items() if n not in (n1, n2)}
+        rest = weighted_sample(remaining, 3, rng)
+        grids.append({
+            "label": f"Paire fréquente ({n1:02d}-{n2:02d}) + complément",
+            "balls": sorted([n1, n2] + rest),
+            "chance": pick_chance(),
+        })
+
+    return grids
 
 
 def summary_report() -> None:
