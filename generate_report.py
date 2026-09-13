@@ -16,6 +16,7 @@ from stats_loto import (
     most_common_pairs,
     chi_square_uniformity,
     theoretical_probabilities,
+    technique_grids,
 )
 
 SITE_DIR = Path(__file__).parent / "site"
@@ -179,6 +180,54 @@ th { color: var(--text-muted); font-weight: 500; }
   font-size: 13px;
 }
 
+.flash-balls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 10px;
+}
+
+.ball {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gold);
+  color: #1a1200;
+  font-weight: 700;
+  font-size: 16px;
+  border: 1px solid var(--rule);
+}
+
+.ball-chance { background: var(--cold); color: var(--text); }
+
+.technique { margin: 16px 0; }
+
+.technique-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+
+.ball-sm { width: 34px; height: 34px; font-size: 13px; }
+
+#flash-btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--gold);
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+#flash-btn:hover { filter: brightness(1.08); }
+
 footer {
   margin-top: 40px;
   padding-top: 18px;
@@ -209,6 +258,49 @@ HEAD = """<!doctype html>
 """
 
 TAIL = """
+<script>
+(function () {
+  function randomInt(maxExclusive) {
+    var arr = new Uint32Array(1);
+    var limit = Math.floor(0xFFFFFFFF / maxExclusive) * maxExclusive;
+    var val;
+    do { crypto.getRandomValues(arr); val = arr[0]; } while (val >= limit);
+    return val % maxExclusive;
+  }
+  function pick5of49() {
+    var pool = [];
+    for (var i = 1; i <= 49; i++) pool.push(i);
+    var picked = [];
+    for (var k = 0; k < 5; k++) {
+      var idx = randomInt(pool.length);
+      picked.push(pool[idx]);
+      pool.splice(idx, 1);
+    }
+    picked.sort(function (a, b) { return a - b; });
+    return picked;
+  }
+  function render() {
+    var container = document.getElementById("flash-balls");
+    if (!container) return;
+    container.innerHTML = "";
+    pick5of49().forEach(function (n) {
+      var el = document.createElement("div");
+      el.className = "ball";
+      el.textContent = n;
+      container.appendChild(el);
+    });
+    var chanceEl = document.createElement("div");
+    chanceEl.className = "ball ball-chance";
+    chanceEl.textContent = randomInt(10) + 1;
+    container.appendChild(chanceEl);
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    render();
+    var btn = document.getElementById("flash-btn");
+    if (btn) btn.addEventListener("click", render);
+  });
+})();
+</script>
 </main>
 </body>
 </html>
@@ -314,6 +406,22 @@ def build_proba_table(proba_df) -> str:
     )
 
 
+def build_technique_grids(grids) -> str:
+    blocks = []
+    for g in grids:
+        balls_html = "".join(f'<div class="ball ball-sm">{n}</div>' for n in g["balls"])
+        chance_html = (
+            f'<div class="ball ball-chance ball-sm">{g["chance"]}</div>'
+            if g["chance"] is not None
+            else ""
+        )
+        blocks.append(
+            f'<div class="technique"><p class="technique-label">{g["label"]}</p>'
+            f'<div class="flash-balls">{balls_html}{chance_html}</div></div>'
+        )
+    return "".join(blocks)
+
+
 def generate() -> Path:
     df = load()
     freq = number_frequencies(df)
@@ -322,6 +430,7 @@ def generate() -> Path:
     pairs = most_common_pairs(df, top_n=10)
     chi2 = chi_square_uniformity(freq)
     proba = theoretical_probabilities()
+    grids = technique_grids(df)
 
     period_start = df["date_tirage"].min().strftime("%d/%m/%Y")
     period_end = df["date_tirage"].max().strftime("%d/%m/%Y")
@@ -339,6 +448,25 @@ def generate() -> Path:
 <p class="notice"><strong>À lire avant de jouer :</strong> chaque tirage est indépendant
 et parfaitement équiprobable. Ce qui suit décrit le passé ; ça n'augmente ni ne
 diminue la chance d'un numéro au prochain tirage.</p>
+
+<section class="flash">
+  <h2>Ta grille — générée au hasard</h2>
+  <div class="flash-balls" id="flash-balls"></div>
+  <button id="flash-btn" type="button">Tirer une nouvelle grille</button>
+  <p class="caption">Générée sur ton téléphone à l'instant, sans lien avec
+  l'historique. Aucune "prédiction" n'est possible sur un tirage indépendant :
+  cette grille a exactement la même probabilité de gagner que n'importe
+  quelle autre combinaison de 5 numéros + 1 numéro Chance.</p>
+</section>
+
+<section>
+  <h2>Grilles — techniques statistiques classiques</h2>
+  {build_technique_grids(grids)}
+  <p class="caption">Fréquence, écarts, paires : ces techniques pèsent le
+  tirage vers l'historique, mais restent mathématiquement équivalentes au
+  hasard pur — le prochain tirage ne dépend pas des précédents. Recalculées
+  à chaque mise à jour du rapport.</p>
+</section>
 
 <section>
   <h2>Fréquence historique — boules 1 à 49</h2>
